@@ -79,12 +79,25 @@ export function HomePage() {
   const [searchQ, setSearchQ] = useState('')
   const [featured, setFeatured] = useState<Tutor[]>([])
   const [loading, setLoading] = useState(true)
+  // P0-4: thống kê thật từ API thay vì số liệu bịa ("1.000+ gia sư", "4.8★")
+  const [liveStats, setLiveStats] = useState<{ tutorCount: number; avgRating: number; reviewCount: number } | null>(null)
 
   useEffect(() => {
-    fetch('/api/tutors?sort=rating')
+    fetch('/api/tutors?sort=rating&pageSize=50')
       .then(r => r.json())
       .then(data => {
         setFeatured((data.tutors || []).slice(0, 8))
+        // Tính thống kê thật từ dữ liệu hiện có
+        const all = data.tutors || []
+        const reviewed = all.filter((t: Tutor) => t.reviewCount > 0)
+        const avg = reviewed.length
+          ? reviewed.reduce((s: number, t: Tutor) => s + t.avgRating, 0) / reviewed.length
+          : 0
+        setLiveStats({
+          tutorCount: data.total ?? all.length,
+          avgRating: Math.round(avg * 10) / 10,
+          reviewCount: all.reduce((s: number, t: Tutor) => s + t.reviewCount, 0),
+        })
         setLoading(false)
       })
       .catch(() => setLoading(false))
@@ -110,7 +123,7 @@ export function HomePage() {
           <div className="max-w-3xl">
             <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-background/80 backdrop-blur-sm border shadow-sm mb-6">
               <Sparkles className="h-3.5 w-3.5 text-primary" />
-              <span className="text-xs font-medium">Hơn 1.000+ gia sư trên khắp Việt Nam</span>
+              <span className="text-xs font-medium">Minh bạch · Độ tin cậy theo điểm · Đặt lịch trực tiếp</span>
             </div>
 
             <h1 className="text-4xl md:text-6xl font-bold tracking-tight leading-[1.05] mb-6">
@@ -142,22 +155,25 @@ export function HomePage() {
               </Button>
             </div>
 
-            {/* Quick stats */}
+            {/* Quick stats — số liệu THẬT từ API (P0-4) */}
             <div className="flex flex-wrap gap-6 mt-8">
               <div>
-                <p className="text-2xl font-bold">1.000+</p>
-                <p className="text-xs text-muted-foreground">Gia sư xác minh</p>
+                <p className="text-2xl font-bold">{liveStats ? liveStats.tutorCount : '—'}</p>
+                <p className="text-xs text-muted-foreground">Gia sư trên nền tảng</p>
               </div>
               <div className="border-l pl-6">
-                <p className="text-2xl font-bold">25+</p>
+                <p className="text-2xl font-bold">34</p>
                 <p className="text-xs text-muted-foreground">Môn học</p>
               </div>
               <div className="border-l pl-6">
-                <p className="text-2xl font-bold">4.8★</p>
-                <p className="text-xs text-muted-foreground">Đánh giá TB</p>
+                <p className="text-2xl font-bold">
+                  {liveStats ? (liveStats.avgRating ? `${liveStats.avgRating}★` : '—') : '—'}
+                  {liveStats && <span className="text-sm font-normal text-muted-foreground"> ({liveStats.reviewCount} đánh giá)</span>}
+                </p>
+                <p className="text-xs text-muted-foreground">Điểm đánh giá trung bình</p>
               </div>
               <div className="border-l pl-6">
-                <p className="text-2xl font-bold">5+</p>
+                <p className="text-2xl font-bold">5</p>
                 <p className="text-xs text-muted-foreground">Thành phố</p>
               </div>
             </div>

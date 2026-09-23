@@ -3,7 +3,7 @@
 import { Card } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
-import { MapPin, Home, School, Star, Clock, BadgeCheck } from 'lucide-react'
+import { MapPin, Home, School, Star, Clock, BadgeCheck, ShieldCheck, Video, Sparkles } from 'lucide-react'
 import { useApp } from '@/lib/store'
 import { RatingStars } from './rating-stars'
 import { formatVnd } from '@/lib/format'
@@ -39,6 +39,13 @@ export interface Tutor {
   avgRating: number
   reviewCount: number
   distanceKm?: number | null
+  // P1: độ tin cậy từ API search
+  reliability?: {
+    score: number
+    tier: string
+    tierLabel: string
+    violations: number
+  }
 }
 
 export function TutorCard({ tutor }: { tutor: Tutor }) {
@@ -65,6 +72,13 @@ export function TutorCard({ tutor }: { tutor: Tutor }) {
             <span className="text-[10px] font-semibold">Đã xác minh</span>
           </div>
         )}
+        {/* P1: gia sư mới chưa có đánh giá — thay vì trơ trọi 0.0★ */}
+        {tutor.reviewCount === 0 && (
+          <div className="absolute top-2 left-2 bg-background/90 backdrop-blur-sm rounded-full px-2 py-1 flex items-center gap-1 shadow-sm">
+            <Sparkles className="h-3.5 w-3.5 text-primary" />
+            <span className="text-[10px] font-semibold">Gia sư mới</span>
+          </div>
+        )}
         <div className="absolute top-2 right-2 bg-background/90 backdrop-blur-sm rounded-full px-2 py-1 shadow-sm">
           <span className="text-xs font-bold text-primary">{formatVnd(tutor.minPrice)}</span>
           <span className="text-[10px] text-muted-foreground">/giờ</span>
@@ -81,10 +95,34 @@ export function TutorCard({ tutor }: { tutor: Tutor }) {
           </div>
         </div>
 
-        <div className="flex items-center gap-1.5 mt-2">
-          <RatingStars rating={tutor.avgRating} size={13} showNumber={false} />
-          <span className="text-sm font-semibold">{tutor.avgRating.toFixed(1)}</span>
-          <span className="text-xs text-muted-foreground">({tutor.reviewCount} đánh giá)</span>
+        <div className="flex items-center gap-1.5 mt-2 flex-wrap">
+          {tutor.reviewCount > 0 ? (
+            <>
+              <RatingStars rating={tutor.avgRating} size={13} showNumber={false} />
+              <span className="text-sm font-semibold">{tutor.avgRating.toFixed(1)}</span>
+              <span className="text-xs text-muted-foreground">({tutor.reviewCount} đánh giá)</span>
+            </>
+          ) : (
+            <span className="text-xs text-muted-foreground">Chưa có đánh giá</span>
+          )}
+          {/* P1: badge độ tin cậy */}
+          {tutor.reliability && (
+            <span
+              className={`ml-auto inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                tutor.reliability.score >= 90
+                  ? 'bg-emerald-100 text-emerald-700'
+                  : tutor.reliability.score >= 70
+                    ? 'bg-blue-100 text-blue-700'
+                    : tutor.reliability.score >= 50
+                      ? 'bg-amber-100 text-amber-700'
+                      : 'bg-rose-100 text-rose-700'
+              }`}
+              title={`Độ tin cậy ${tutor.reliability.score}/100 · ${tutor.reliability.tierLabel}`}
+            >
+              <ShieldCheck className="h-3 w-3" />
+              {tutor.reliability.score}
+            </span>
+          )}
         </div>
 
         {/* Subjects */}
@@ -113,6 +151,11 @@ export function TutorCard({ tutor }: { tutor: Tutor }) {
             {tutor.teachesAtOwnPlace && (
               <span title="Học tại cơ sở" className="flex h-6 w-6 items-center justify-center rounded-md bg-accent text-accent-foreground">
                 <School className="h-3 w-3" />
+              </span>
+            )}
+            {tutor.teachesOnline && (
+              <span title="Dạy trực tuyến" className="flex h-6 w-6 items-center justify-center rounded-md bg-emerald-100 text-emerald-700">
+                <Video className="h-3 w-3" />
               </span>
             )}
           </div>
