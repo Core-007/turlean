@@ -116,7 +116,7 @@ const TUTORS = [
     subjects: ['toan-hoc', 'luyen-thi-thpt', 'boi-duong-hsg'],
     pricePerHour: 350000,
     location: { city: 'Hà Nội', district: 'Cầu Giấy' },
-    teachesAtStudentHome: true, teachesAtOwnPlace: true, travelRadiusKm: 8,
+    teachesAtStudentHome: true, teachesAtOwnPlace: true, teachesOnline: true, travelRadiusKm: 8,
   },
   {
     name: 'Trần Hoàng Long',
@@ -128,7 +128,7 @@ const TUTORS = [
     subjects: ['vat-ly', 'luyen-thi-thpt'],
     pricePerHour: 400000,
     location: { city: 'Hà Nội', district: 'Ba Đình' },
-    teachesAtStudentHome: true, teachesAtOwnPlace: true, travelRadiusKm: 10,
+    teachesAtStudentHome: true, teachesAtOwnPlace: true, teachesOnline: true, travelRadiusKm: 10,
   },
   {
     name: 'Lê Thị Thu Hà',
@@ -264,7 +264,7 @@ const TUTORS = [
     subjects: ['ielts', 'tieng-anh-giao-tiep', 'toeic'],
     pricePerHour: 600000,
     location: { city: 'TP.HCM', district: 'Quận 1' },
-    teachesAtStudentHome: true, teachesAtOwnPlace: true, travelRadiusKm: 12,
+    teachesAtStudentHome: true, teachesAtOwnPlace: true, teachesOnline: true, travelRadiusKm: 12,
   },
   {
     name: 'Trần Khôi Nguyên',
@@ -349,7 +349,7 @@ const TUTORS = [
     subjects: ['toan-hoc', 'toan-cap-2', 'luyen-thi-thpt'],
     pricePerHour: 280000,
     location: { city: 'Đà Nẵng', district: 'Hải Châu' },
-    teachesAtStudentHome: true, teachesAtOwnPlace: true, travelRadiusKm: 8,
+    teachesAtStudentHome: true, teachesAtOwnPlace: true, teachesOnline: true, travelRadiusKm: 8,
   },
   {
     name: 'Ngô Bá Khôi',
@@ -423,7 +423,7 @@ const TUTORS = [
     subjects: ['toan-tieu-hoc', 'tieng-viet-tieu-hoc', 'tu-nhien-xa-hoi'],
     pricePerHour: 180000,
     location: { city: 'Cần Thơ', district: 'Bình Thủy' },
-    teachesAtStudentHome: true, teachesAtOwnPlace: true, travelRadiusKm: 5,
+    teachesAtStudentHome: true, teachesAtOwnPlace: true, teachesOnline: true, travelRadiusKm: 5,
   },
 ]
 
@@ -463,12 +463,12 @@ const STUDENTS = [
 async function main() {
   console.log('🌱 Seeding database (expanded: all grades + 5 cities)...')
 
-  // Clean up
+  // Clean up in correct order (children before parents)
+  await db.session.deleteMany()
+  await db.availability.deleteMany()
   await db.review.deleteMany()
   await db.booking.deleteMany()
-  await db.availability.deleteMany()
   await db.tutorSubject.deleteMany()
-  await db.session.deleteMany()
   await db.user.deleteMany()
   await db.subject.deleteMany()
 
@@ -491,9 +491,11 @@ async function main() {
 
   // Create tutors
   const tutorIds: string[] = []
+  let tutorIdx = 0
   for (const t of TUTORS) {
     const loc = LOCATIONS.find(l => l.city === t.location.city && l.district === t.location.district)!
     const passwordHash = await bcrypt.hash('123456', 10)
+    const idx = tutorIdx++
 
     const tutor = await db.user.create({
       data: {
@@ -507,7 +509,9 @@ async function main() {
         experienceYears: t.experienceYears,
         education: t.education,
         hourlyRate: t.pricePerHour,
-        isVerified: true,
+        // P0-4: chỉ ~1/4 gia sư được verify (thực tế marketplace — còn lại hiển thị
+        // "Chưa xác minh" trung thực, chờ workflow verify thật ở Phase 2)
+        isVerified: idx % 4 === 0,
         address: `Số ${Math.floor(1 + Math.random() * 200)} Đường ${['Nguyễn Phong Sắc', 'Trần Duy Hưng', 'Kim Mã', 'Hào Nam', 'Láng', 'Tây Sơn', 'Huỳnh Thúc Kháng', 'Nguyễn Trãi', 'Lê Lợi', 'Hai Bà Trưng', 'Nguyễn Huệ'][Math.floor(Math.random() * 11)]}`,
         district: t.location.district,
         city: t.location.city,
@@ -515,6 +519,7 @@ async function main() {
         lng: loc.lng + (Math.random() - 0.5) * 0.01,
         teachesAtStudentHome: t.teachesAtStudentHome,
         teachesAtOwnPlace: t.teachesAtOwnPlace,
+        teachesOnline: (t as any).teachesOnline ?? false,
         travelRadiusKm: t.travelRadiusKm,
       }
     })
@@ -625,6 +630,59 @@ async function main() {
     }
   }
   console.log(`✓ Created ${bookingCount} bookings, ${reviewCount} reviews`)
+
+  // P0-1: tạo dữ liệu mẫu cho hệ thống Reliability (một vài booking bị hủy
+  // kèm lý do + mức vi phạm, để demo điểm tin cậy thật trên UI)
+  const cancelled = [
+    { tutorIdx: 1, cancelledBy: 'TUTOR', hoursBefore: 1.5, severity: 'SEVERE', points: 20, reason: 'Gia sư báo ốm đột xuất, không sắp xếp được người thay thế' },
+    { tutorIdx: 1, cancelledBy: 'TUTOR', hoursBefore: 30, severity: 'WARNING', points: 10, reason: 'Trường họp giáo viên đột xuất, xin đổi lịch sang tuần sau' },
+    { tutorIdx: 4, cancelledBy: 'STUDENT', hoursBefore: 20, severity: 'WARNING', points: 10, reason: 'Con bị ốm sốt, phải đưa đi khám bệnh' },
+    { tutorIdx: 7, cancelledBy: 'STUDENT', hoursBefore: 48, severity: 'MINOR', points: 5, reason: 'Gia đình về quê có việc gấp' },
+    { tutorIdx: 9, cancelledBy: 'TUTOR', hoursBefore: 5, severity: 'VIOLATION', points: 15, reason: 'Quên lịch dạy do bận ôn thi' },
+  ] as const
+
+  let cancelCount = 0
+  for (const c of cancelled) {
+    const tutor = TUTORS[c.tutorIdx]
+    const tutorId = tutorIds[c.tutorIdx]
+    const studentId = studentIds[Math.floor(Math.random() * studentIds.length)]
+    const subjectSlug = tutor.subjects[Math.floor(Math.random() * tutor.subjects.length)]
+    const subjectId = subjectMap.get(subjectSlug)!
+    const daysAgo = Math.floor(Math.random() * 60) + 5
+    const date = new Date(Date.now() - daysAgo * 24 * 60 * 60 * 1000)
+    const dateStr = date.toISOString().split('T')[0]
+    const hour = 18
+
+    const booking = await db.booking.create({
+      data: {
+        studentId,
+        tutorId,
+        subjectId,
+        mode: 'TUTOR_TO_STUDENT',
+        date: dateStr,
+        startTime: `${String(hour).padStart(2, '0')}:00`,
+        endTime: `${String(hour + 1).padStart(2, '0')}:30`,
+        durationHours: 1.5,
+        status: 'CANCELLED',
+        totalAmount: tutor.pricePerHour * 1.5,
+        note: 'Buổi học bị hủy'
+      }
+    })
+
+    await db.cancellation.create({
+      data: {
+        bookingId: booking.id,
+        cancelledBy: c.cancelledBy,
+        reason: c.reason,
+        bookingStatus: 'CONFIRMED',
+        hoursBefore: c.hoursBefore,
+        severity: c.severity,
+        points: c.points,
+      }
+    })
+    cancelCount++
+  }
+  console.log(`✓ Created ${cancelCount} cancellations (reliability demo data)`)
 
   console.log('\n✅ Seed completed!')
   console.log('Demo accounts (password: 123456):')

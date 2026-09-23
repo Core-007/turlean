@@ -8,14 +8,19 @@ import { Badge } from '@/components/ui/badge'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { Progress } from '@/components/ui/progress'
+import { Textarea } from '@/components/ui/textarea'
+import { RatingStars } from '@/components/rating-stars'
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter
+} from '@/components/ui/dialog'
 import {
   Calendar, Clock, MapPin, Home, School, Wallet, TrendingUp,
   CheckCircle2, XCircle, AlertCircle, Phone, MessageSquare,
   Star, BookOpen, Users, ArrowRight, Briefcase, GraduationCap,
   PencilLine, BookOpenCheck, CalendarCheck, ExternalLink, Sparkles,
-  Award, ChevronRight, UserCheck, Clock3
+  Award, ChevronRight, UserCheck, Clock3, ShieldCheck, Video
 } from 'lucide-react'
-import { formatVnd, formatDate } from '@/lib/format'
+import { formatVnd, formatDate, timeAgo } from '@/lib/format'
 import { toast } from 'sonner'
 
 interface Booking {
@@ -32,6 +37,7 @@ interface Booking {
   address?: string | null
   note?: string | null
   totalAmount: number
+  review?: { id: string; rating: number } | null // P0-2: đã đánh giá chưa
   tutor: { id: string, name: string, avatar?: string | null, profession?: string | null, phone?: string | null, address?: string | null, district?: string | null, lat?: number | null, lng?: number | null }
   student: { id: string, name: string, avatar?: string | null, phone?: string | null, address?: string | null, district?: string | null }
   subject: { id: string, name: string }
@@ -52,6 +58,43 @@ interface Completeness {
   percent: number
   checks: Record<string, boolean>
   missing: string[]
+}
+
+interface ReliabilityData {
+  reliability: {
+    score: number
+    tier: { key: string; label: string; color: string }
+    totalCancellations: number
+    violations: number
+    warnings: number
+  }
+  violations: {
+    id: string
+    severity: string
+    points: number
+    reason: string
+    hoursBefore: number
+    createdAt: string
+    subject: string
+    counterpart: string
+    date: string
+    startTime: string
+  }[]
+}
+
+const SEVERITY_MAP: Record<string, { label: string; color: string }> = {
+  SEVERE: { label: 'Vi phạm nghiêm trọng', color: 'text-rose-600 bg-rose-100' },
+  VIOLATION: { label: 'Vi phạm', color: 'text-rose-600 bg-rose-50' },
+  WARNING: { label: 'Cảnh báo', color: 'text-amber-600 bg-amber-100' },
+  MINOR: { label: 'Nhẹ', color: 'text-amber-600 bg-amber-50' },
+  NONE: { label: 'Không ảnh hưởng', color: 'text-muted-foreground bg-muted' },
+}
+
+const TIER_COLOR_CLASS: Record<string, string> = {
+  EXCELLENT: 'text-emerald-600',
+  GOOD: 'text-blue-600',
+  AVERAGE: 'text-amber-600',
+  POOR: 'text-rose-600',
 }
 
 const STATUS_MAP: Record<string, { label: string, color: string, icon: any }> = {
@@ -79,6 +122,18 @@ export function DashboardPage() {
   const [tab, setTab] = useState<'requests' | 'upcoming' | 'history'>('requests')
   const [stats, setStats] = useState<Stats | null>(null)
   const [completeness, setCompleteness] = useState<Completeness | null>(null)
+  const [reliabilityData, setReliabilityData] = useState<ReliabilityData | null>(null)
+
+  // P0-1: dialog hủy lịch kèm lý do
+  const [cancelTarget, setCancelTarget] = useState<Booking | null>(null)
+  const [cancelReason, setCancelReason] = useState('')
+  const [submittingCancel, setSubmittingCancel] = useState(false)
+
+  // P0-2: dialog đánh giá buổi học (thay cho toast "sẽ có sớm")
+  const [reviewTarget, setReviewTarget] = useState<Booking | null>(null)
+  const [reviewRating, setReviewRating] = useState(5)
+  const [reviewComment, setReviewComment] = useState('')
+  const [submittingReview, setSubmittingReview] = useState(false)
 
   useEffect(() => {
     if (!user) return
@@ -87,10 +142,13 @@ export function DashboardPage() {
       user.role === 'TUTOR'
         ? fetch('/api/tutors/me/stats').then(r => r.json())
         : Promise.resolve(null),
-    ]).then(([data, s]) => {
+      // P0-1: điểm tin cậy & lịch sử vi phạm của chính mình
+      fetch('/api/users/me/violations').then(r => r.json()).catch(() => null),
+    ]).then(([data, s, rel]) => {
       setBookings(data.bookings || [])
       if (s?.stats) setStats(s.stats)
       if (s?.completeness) setCompleteness(s.completeness)
+      if (rel?.reliability) setReliabilityData(rel)
       setLoading(false)
     })
   }, [user])
@@ -133,8 +191,7 @@ export function DashboardPage() {
     : 0
 
   const handleStatusChange = async (bookingId: string, status: string) => {
-    const actionLabel = status === 'CANCELLED' ? 'hủy' : status === 'CONFIRMED' ? 'xác nhận' : 'cập nhật'
-    if (status === 'CANCELLED' && !confirm(`Bạn có chắc muốn ${actionLabel} lịch này?`)) return
+    const actionLabel = status === 'CONFIRMED' ? 'xác nhận' : 'cập nhật'
     try {
       const res = await fetch('/api/bookings', {
         method: 'PATCH',
@@ -150,11 +207,82 @@ export function DashboardPage() {
     }
   }
 
+  // P0-1: mở dialog hủy lịch (bắt buộc lý do >= 5 ký tự)
+  const openCancelDialog = (b: Booking) => {
+    setCancelTarget(b)
+    setCancelReason('')
+  }
+
+  const submitCancel = async () => {
+    if (!cancelTarget) return
+    if (cancelReason.trim().length < 5) {
+      toast.error('Vui lòng nhập lý do hủy (tối thiểu 5 ký tự)')
+      return
+    }
+    setSubmittingCancel(true)
+    try {
+      const res = await fetch(`/api/bookings/${cancelTarget.id}/cancel`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: cancelReason.trim() })
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Hủy lịch thất bại')
+      setBookings(prev => prev.map(b => b.id === cancelTarget.id ? { ...b, status: 'CANCELLED' } : b))
+      toast.success(data.message || 'Đã hủy lịch')
+      if (data.violation?.points > 0) {
+        toast.warning(`Độ tin cậy của bạn bị trừ ${data.violation.points} điểm (${data.violation.label})`, { duration: 6000 })
+      }
+      setCancelTarget(null)
+      // Làm mới điểm tin cậy sau khi hủy
+      fetch('/api/users/me/violations').then(r => r.json()).then(rel => {
+        if (rel?.reliability) setReliabilityData(rel)
+      }).catch(() => {})
+    } catch (e: any) {
+      toast.error(e.message)
+    } finally {
+      setSubmittingCancel(false)
+    }
+  }
+
+  // P0-2: gửi đánh giá thật qua API
+  const submitReview = async () => {
+    if (!reviewTarget) return
+    if (reviewRating < 1) {
+      toast.error('Vui lòng chọn số sao đánh giá')
+      return
+    }
+    setSubmittingReview(true)
+    try {
+      const res = await fetch('/api/reviews', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          bookingId: reviewTarget.id,
+          rating: reviewRating,
+          comment: reviewComment.trim() || undefined,
+        })
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Gửi đánh giá thất bại')
+      toast.success('Cảm ơn bạn đã đánh giá buổi học!')
+      setReviewTarget(null)
+      setReviewRating(5)
+      setReviewComment('')
+    } catch (e: any) {
+      toast.error(e.message)
+    } finally {
+      setSubmittingReview(false)
+    }
+  }
+
   const BookingCard = ({ b, showActions = true }: { b: Booking, showActions?: boolean }) => {
     const status = STATUS_MAP[b.status] || STATUS_MAP.PENDING
     const StatusIcon = status.icon
     const other = b[otherParty as 'tutor' | 'student']
-    const isPast = new Date(b.date + 'T' + b.startTime) < now
+    const classStart = new Date(b.date + 'T' + b.startTime)
+    const isPast = classStart < now // buổi học ĐÃ ĐẾN/QUA giờ bắt đầu
+    const modeLabel = b.mode === 'ONLINE' ? 'Trực tuyến' : b.mode === 'TUTOR_TO_STUDENT' ? 'Gia sư đến nhà' : 'Tại cơ sở'
 
     return (
       <Card className="p-4">
@@ -190,8 +318,8 @@ export function DashboardPage() {
                 {b.startTime} - {b.endTime}
               </div>
               <div className="flex items-center gap-1.5 text-muted-foreground">
-                {b.mode === 'TUTOR_TO_STUDENT' ? <Home className="h-3.5 w-3.5" /> : <School className="h-3.5 w-3.5" />}
-                {b.mode === 'TUTOR_TO_STUDENT' ? 'Gia sư đến nhà' : 'Tại cơ sở'}
+                {b.mode === 'TUTOR_TO_STUDENT' ? <Home className="h-3.5 w-3.5" /> : b.mode === 'ONLINE' ? <Video className="h-3.5 w-3.5" /> : <School className="h-3.5 w-3.5" />}
+                {modeLabel}
               </div>
               <div className="flex items-center gap-1.5 text-muted-foreground">
                 <Wallet className="h-3.5 w-3.5" />
@@ -216,32 +344,28 @@ export function DashboardPage() {
               <div className="flex gap-2 mt-3 flex-wrap">
                 {b.status === 'PENDING' && isTutor && (
                   <>
-                    <Button size="sm" onClick={() => handleStatusChange(b.id, 'CONFIRMED')}>
+                    <Button size="sm" onClick={() => handleStatusChange(b.id, 'CONFIRMED')} disabled={isPast}>
                       <CheckCircle2 className="h-3.5 w-3.5 mr-1" /> Xác nhận
                     </Button>
-                    <Button size="sm" variant="outline" onClick={() => handleStatusChange(b.id, 'CANCELLED')}>
+                    <Button size="sm" variant="outline" onClick={() => openCancelDialog(b)}>
                       <XCircle className="h-3.5 w-3.5 mr-1" /> Từ chối
                     </Button>
                   </>
                 )}
                 {b.status === 'PENDING' && !isTutor && (
-                  <Button size="sm" variant="outline" onClick={() => handleStatusChange(b.id, 'CANCELLED')}>
+                  <Button size="sm" variant="outline" onClick={() => openCancelDialog(b)}>
                     <XCircle className="h-3.5 w-3.5 mr-1" /> Hủy yêu cầu
                   </Button>
                 )}
-                {b.status === 'CONFIRMED' && !isPast && isTutor && (
+                {/* P0-2: đánh dấu hoàn thành chỉ hiện SAU khi buổi học đã bắt đầu */}
+                {b.status === 'CONFIRMED' && isPast && isTutor && (
                   <Button size="sm" variant="outline" onClick={() => handleStatusChange(b.id, 'COMPLETED')}>
-                    <CheckCircle2 className="h-3.5 w-3.5 mr-1" /> Đánh dấu đã dạy
+                    <CheckCircle2 className="h-3.5 w-3.5 mr-1" /> Đánh dấu đã dạy xong
                   </Button>
                 )}
-                {b.status === 'CONFIRMED' && !isPast && !isTutor && (
-                  <Button size="sm" variant="outline" onClick={() => handleStatusChange(b.id, 'CANCELLED')}>
+                {b.status === 'CONFIRMED' && !isPast && (
+                  <Button size="sm" variant="outline" onClick={() => openCancelDialog(b)}>
                     <XCircle className="h-3.5 w-3.5 mr-1" /> Hủy buổi học
-                  </Button>
-                )}
-                {b.status === 'COMPLETED' && !isTutor && (
-                  <Button size="sm" variant="outline" onClick={() => toast.info('Tính năng đánh giá sẽ có sớm')}>
-                    <Star className="h-3.5 w-3.5 mr-1" /> Đánh giá
                   </Button>
                 )}
                 {other.phone && (b.status === 'CONFIRMED' || b.status === 'COMPLETED') && (
@@ -251,11 +375,166 @@ export function DashboardPage() {
                 )}
               </div>
             )}
+
+            {/* P0-2: trạng thái đánh giá — nút chỉ hiện cho buổi CHƯA đánh giá,
+                 buổi đã đánh giá hiển thị sao đã chấm */}
+            {b.status === 'COMPLETED' && !isTutor && !b.review && (
+              <div className="mt-3">
+                <Button size="sm" variant="outline" onClick={() => setReviewTarget(b)}>
+                  <Star className="h-3.5 w-3.5 mr-1" /> Đánh giá buổi học
+                </Button>
+              </div>
+            )}
+            {b.status === 'COMPLETED' && !isTutor && b.review && (
+              <div className="mt-3 flex items-center gap-1.5 text-xs text-muted-foreground">
+                <Star className="h-3.5 w-3.5 fill-amber-400 text-amber-400" />
+                <span>Đã đánh giá {b.review.rating}/5</span>
+              </div>
+            )}
           </div>
         </div>
       </Card>
     )
   }
+
+  // P0-1: thẻ độ tin cậy hiển thị trong dashboard (cả 2 vai trò)
+  const ReliabilitySection = () => {
+    if (!reliabilityData?.reliability) return null
+    const rel = reliabilityData.reliability
+    const tierClass = TIER_COLOR_CLASS[rel.tier.key] || 'text-muted-foreground'
+    return (
+      <Card className="p-4 mb-6">
+        <div className="flex items-start gap-3">
+          <div className="h-10 w-10 rounded-xl bg-primary/10 text-primary flex items-center justify-center shrink-0">
+            <ShieldCheck className="h-5 w-5" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center justify-between gap-2 mb-2 flex-wrap">
+              <h3 className="font-semibold text-sm">Độ tin cậy của bạn</h3>
+              <span className={`text-lg font-bold ${tierClass}`}>
+                {rel.score}/100 · {rel.tier.label}
+              </span>
+            </div>
+            <Progress value={rel.score} className="h-2 mb-3" />
+            <div className="grid grid-cols-3 gap-2 text-center">
+              <div className="rounded-lg bg-muted/50 p-2">
+                <p className="text-xs text-muted-foreground">Lần hủy</p>
+                <p className="font-bold text-sm">{rel.totalCancellations}</p>
+              </div>
+              <div className="rounded-lg bg-muted/50 p-2">
+                <p className="text-xs text-muted-foreground">Vi phạm</p>
+                <p className="font-bold text-sm text-rose-600">{rel.violations}</p>
+              </div>
+              <div className="rounded-lg bg-muted/50 p-2">
+                <p className="text-xs text-muted-foreground">Cảnh báo</p>
+                <p className="font-bold text-sm text-amber-600">{rel.warnings}</p>
+              </div>
+            </div>
+            {reliabilityData.violations.length > 0 && (
+              <div className="mt-3 space-y-2 max-h-40 overflow-y-auto">
+                {reliabilityData.violations.slice(0, 5).map(v => (
+                  <div key={v.id} className="flex items-start justify-between gap-2 p-2 rounded-lg border text-xs">
+                    <div className="min-w-0">
+                      <p className="font-medium truncate">{v.subject} — {v.counterpart}</p>
+                      <p className="text-muted-foreground truncate">{v.reason}</p>
+                      <p className="text-muted-foreground/70">{formatDate(v.date)} {v.startTime} · {timeAgo(v.createdAt)}</p>
+                    </div>
+                    <span className={`shrink-0 rounded px-1.5 py-0.5 font-medium ${SEVERITY_MAP[v.severity]?.color ?? ''}`}>
+                      -{v.points}đ
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </Card>
+    )
+  }
+
+  // P0-1 + P0-2: dialog hủy lịch (lý do bắt buộc) + dialog đánh giá buổi học
+  const DashboardDialogs = () => (
+    <>
+      {/* Dialog hủy lịch kèm lý do */}
+      <Dialog open={!!cancelTarget} onOpenChange={(open) => !open && setCancelTarget(null)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Hủy buổi học</DialogTitle>
+            <DialogDescription>
+              {cancelTarget && (
+                <>Buổi {cancelTarget.subject.name} · {formatDate(cancelTarget.date)} · {cancelTarget.startTime}—{cancelTarget.endTime}</>
+              )}
+              <br />Lý do hủy là bắt buộc và được ghi lại để bảo vệ tính minh bạch cho cả hai bên.
+            </DialogDescription>
+          </DialogHeader>
+          <Textarea
+            placeholder="Ví dụ: Con ốm phải đưa đi khám... (tối thiểu 5 ký tự)"
+            value={cancelReason}
+            onChange={(e) => setCancelReason(e.target.value)}
+            rows={3}
+          />
+          <p className="text-xs text-muted-foreground">
+            Hủy sát giờ học có thể ảnh hưởng điểm độ tin cậy của bạn.
+          </p>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setCancelTarget(null)}>Giữ lịch</Button>
+            <Button variant="destructive" onClick={submitCancel} disabled={submittingCancel || cancelReason.trim().length < 5}>
+              {submittingCancel ? 'Đang xử lý...' : 'Xác nhận hủy'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Dialog đánh giá buổi học (P0-2) */}
+      <Dialog open={!!reviewTarget} onOpenChange={(open) => !open && setReviewTarget(null)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Đánh giá buổi học</DialogTitle>
+            <DialogDescription>
+              {reviewTarget && (
+                <>Buổi {reviewTarget.subject.name} với gia sư {reviewTarget.tutor.name} · {formatDate(reviewTarget.date)}</>
+              )}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div>
+              <p className="text-sm font-semibold mb-2">Bạn đánh giá buổi học này mấy sao?</p>
+              <div className="flex gap-1">
+                {[1, 2, 3, 4, 5].map(star => (
+                  <button
+                    key={star}
+                    type="button"
+                    onClick={() => setReviewRating(star)}
+                    className="p-1 transition-transform hover:scale-110"
+                    aria-label={`${star} sao`}
+                  >
+                    <Star
+                      className={`h-8 w-8 ${star <= reviewRating ? 'fill-amber-400 text-amber-400' : 'text-muted-foreground/30'}`}
+                    />
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div>
+              <p className="text-sm font-semibold mb-2">Nhận xét (tùy chọn)</p>
+              <Textarea
+                placeholder="Gia sư dạy dễ hiểu, đúng giờ, nhiệt tình..."
+                value={reviewComment}
+                onChange={(e) => setReviewComment(e.target.value)}
+                rows={3}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setReviewTarget(null)}>Để sau</Button>
+            <Button onClick={submitReview} disabled={submittingReview}>
+              {submittingReview ? 'Đang gửi...' : 'Gửi đánh giá'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
+  )
 
   // TUTOR DASHBOARD LAYOUT
   if (isTutor) {
@@ -419,6 +698,9 @@ export function DashboardPage() {
           </Card>
         </div>
 
+        {/* P0-1: độ tin cậy của gia sư */}
+        <ReliabilitySection />
+
         {/* Bookings tabs */}
         <Tabs value={tab} onValueChange={(v) => setTab(v as any)}>
           <TabsList className="mb-4">
@@ -488,6 +770,8 @@ export function DashboardPage() {
             )}
           </TabsContent>
         </Tabs>
+
+        <DashboardDialogs />
       </div>
     )
   }
@@ -553,6 +837,9 @@ export function DashboardPage() {
         </Card>
       </div>
 
+      {/* P0-1: độ tin cậy của học sinh/phụ huynh */}
+      <ReliabilitySection />
+
       {/* Tabs */}
       <Tabs value={tab === 'requests' ? 'upcoming' : tab} onValueChange={(v) => setTab(v as any)}>
         <TabsList className="mb-4">
@@ -602,6 +889,8 @@ export function DashboardPage() {
           )}
         </TabsContent>
       </Tabs>
+
+      <DashboardDialogs />
     </div>
   )
 }

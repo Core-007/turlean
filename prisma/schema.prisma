@@ -79,7 +79,7 @@ model Booking {
   date         String   // YYYY-MM-DD
   startTime    String   // HH:MM
   endTime      String   // HH:MM
-  durationHours Int     @default(1)
+  durationHours Float    @default(1) // P0-5: Float thay vì Int — giữ đúng 1.5h/2.5h (Int làm mất nửa giờ)
   status       String   @default("PENDING") // PENDING | CONFIRMED | COMPLETED | CANCELLED
   address      String?
   lat          Float?
@@ -91,6 +91,22 @@ model Booking {
   tutor        User     @relation("TutorBookings", fields: [tutorId], references: [id])
   subject      Subject  @relation(fields: [subjectId], references: [id])
   review       Review?
+  cancellation Cancellation?
+}
+
+// Reliability system — mọi lần hủy lịch đều được ghi lại kèm mức độ vi phạm
+model Cancellation {
+  id          String   @id @default(cuid())
+  bookingId   String   @unique
+  cancelledBy String   // TUTOR | STUDENT — ai là người hủy
+  reason      String   // lý do hủy, bắt buộc >= 5 ký tự
+  bookingStatus String // PENDING | CONFIRMED — trạng thái lúc hủy
+  hoursBefore Float    // khoảng cách từ lúc hủy đến giờ bắt đầu buổi học
+  severity    String   // NONE | MINOR | WARNING | VIOLATION | SEVERE
+  points      Int      // số điểm reliability bị trừ
+  createdAt   DateTime @default(now())
+
+  booking     Booking  @relation(fields: [bookingId], references: [id])
 }
 
 model Review {

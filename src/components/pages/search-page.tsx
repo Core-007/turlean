@@ -14,7 +14,7 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { TutorCard, Tutor } from '@/components/tutor-card'
 import {
   Search, MapPin, Home, School, SlidersHorizontal, LayoutGrid, Map as MapIcon,
-  X, Navigation, Star, GraduationCap
+  X, Navigation, Star, GraduationCap, Video, ChevronLeft, ChevronRight
 } from 'lucide-react'
 import { formatVnd } from '@/lib/format'
 
@@ -83,7 +83,7 @@ export function SearchPage() {
   const [mode, setMode] = useState<string>(initial.mode || saved.mode || '')
   const [maxPrice, setMaxPrice] = useState<number>(saved.maxPrice ?? 800000)
   const [minRating, setMinRating] = useState<number>(saved.minRating ?? 0)
-  const [sort, setSort] = useState<'rating' | 'price_asc' | 'price_desc' | 'distance'>(saved.sort as any || 'rating')
+  const [sort, setSort] = useState<'rating' | 'newest' | 'price_asc' | 'price_desc' | 'distance'>(saved.sort as any || 'rating')
   const [viewMode, setViewMode] = useState<'grid' | 'map'>(saved.viewMode || 'grid')
   const [selectedId, setSelectedId] = useState<string | undefined>()
 
@@ -165,7 +165,23 @@ export function SearchPage() {
   const effectiveLat = userLat ?? pickedLat
   const effectiveLng = userLng ?? pickedLng
 
-  // Build query string and fetch
+  // Build query string and fetch (P1: kèm page + pageSize)
+  const [total, setTotal] = useState(0)
+  const [totalPages, setTotalPages] = useState(1)
+
+  // Chữ ký bộ lọc — đổi filter tự động reset về trang 1 (derived state,
+  // tránh setState-in-effect)
+  const filterSignature = useMemo(() =>
+    JSON.stringify([search, city, district, level, mode, maxPrice, minRating, effectiveLat, effectiveLng, sort]),
+    [search, city, district, level, mode, maxPrice, minRating, effectiveLat, effectiveLng, sort]
+  )
+  const [pageState, setPageState] = useState({ sig: filterSignature, page: 1 })
+  const page = pageState.sig === filterSignature ? pageState.page : 1
+  const setPage = (updater: number | ((p: number) => number)) => {
+    const next = typeof updater === 'function' ? (updater as (p: number) => number)(page) : updater
+    setPageState({ sig: filterSignature, page: next })
+  }
+
   const queryString = useMemo(() => {
     const params = new URLSearchParams()
     if (search) params.set('q', search)
@@ -181,16 +197,22 @@ export function SearchPage() {
       params.set('radius', '15')
     }
     params.set('sort', sort)
+    params.set('page', String(page))
+    params.set('pageSize', '12')
     return params.toString()
-  }, [search, city, district, level, mode, maxPrice, minRating, effectiveLat, effectiveLng, sort])
+  }, [search, city, district, level, mode, maxPrice, minRating, effectiveLat, effectiveLng, sort, page])
 
   useEffect(() => {
     let cancelled = false
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setLoading(true)
     fetch(`/api/tutors?${queryString}`)
       .then(r => r.json())
       .then(data => {
         if (cancelled) return
         setTutors(data.tutors || [])
+        setTotal(data.total ?? (data.tutors || []).length)
+        setTotalPages(data.totalPages ?? 1)
         setLoading(false)
       })
       .catch(() => {
@@ -247,10 +269,10 @@ export function SearchPage() {
 
       <Separator />
 
-      {/* Mode filter - the differentiator */}
+      {/* Mode filter - the differentiator (P1: thêm ONLINE) */}
       <div>
         <Label className="text-sm font-semibold mb-3 block">Phương thức học</Label>
-        <div className="grid grid-cols-2 gap-2">
+        <div className="grid grid-cols-3 gap-2">
           <button
             onClick={() => setMode(mode === 'TUTOR_TO_STUDENT' ? '' : 'TUTOR_TO_STUDENT')}
             className={`p-3 rounded-xl border-2 text-left transition-all ${
@@ -261,7 +283,7 @@ export function SearchPage() {
           >
             <Home className={`h-5 w-5 mb-1 ${mode === 'TUTOR_TO_STUDENT' ? 'text-primary' : 'text-muted-foreground'}`} />
             <p className="text-xs font-semibold">Gia sư đến nhà</p>
-            <p className="text-[10px] text-muted-foreground">Tiện lợi cho HS</p>
+            <p className="text-[10px] text-muted-foreground">Tiện cho HS</p>
           </button>
           <button
             onClick={() => setMode(mode === 'STUDENT_TO_TUTOR' ? '' : 'STUDENT_TO_TUTOR')}
@@ -274,6 +296,18 @@ export function SearchPage() {
             <School className={`h-5 w-5 mb-1 ${mode === 'STUDENT_TO_TUTOR' ? 'text-primary' : 'text-muted-foreground'}`} />
             <p className="text-xs font-semibold">Đến cơ sở</p>
             <p className="text-[10px] text-muted-foreground">Có thiết bị</p>
+          </button>
+          <button
+            onClick={() => setMode(mode === 'ONLINE' ? '' : 'ONLINE')}
+            className={`p-3 rounded-xl border-2 text-left transition-all ${
+              mode === 'ONLINE'
+                ? 'border-primary bg-primary/5'
+                : 'border-border hover:border-primary/30'
+            }`}
+          >
+            <Video className={`h-5 w-5 mb-1 ${mode === 'ONLINE' ? 'text-primary' : 'text-muted-foreground'}`} />
+            <p className="text-xs font-semibold">Trực tuyến</p>
+            <p className="text-[10px] text-muted-foreground">Mọi lúc mọi nơi</p>
           </button>
         </div>
       </div>
@@ -548,6 +582,7 @@ export function SearchPage() {
                 className="text-sm border rounded-lg px-2 py-1.5 bg-background"
               >
                 <option value="rating">Đánh giá cao</option>
+                <option value="newest">Mới nhất</option>
                 <option value="price_asc">Giá thấp → cao</option>
                 <option value="price_desc">Giá cao → thấp</option>
                 {userLat && <option value="distance">Gần nhất</option>}
@@ -590,6 +625,31 @@ export function SearchPage() {
                   {tutors.map(t => (
                     <TutorCard key={t.id} tutor={t} />
                   ))}
+                </div>
+              )}
+
+              {/* P1: phân trang */}
+              {!loading && viewMode === 'grid' && totalPages > 1 && (
+                <div className="flex items-center justify-center gap-2 mt-6">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={page <= 1}
+                    onClick={() => setPage(p => Math.max(1, p - 1))}
+                  >
+                    <ChevronLeft className="h-4 w-4" /> Trước
+                  </Button>
+                  <span className="text-sm text-muted-foreground px-2">
+                    Trang {page}/{totalPages} · {total} gia sư
+                  </span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={page >= totalPages}
+                    onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+                  >
+                    Sau <ChevronRight className="h-4 w-4" />
+                  </Button>
                 </div>
               )}
             </>
